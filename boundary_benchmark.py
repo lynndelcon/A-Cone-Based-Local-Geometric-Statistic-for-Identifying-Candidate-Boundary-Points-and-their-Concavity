@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible boundary-detection benchmark. 
+"""Reproducible boundary-detection benchmark. See ../README.md.
 
 Requires: numpy scipy pandas scikit-learn jinja2. External methods are provided by the user
 via --adapter MODULE; no purported Hickok/BEPS implementations are fabricated.
@@ -8,7 +8,6 @@ BEPS is ONE algorithm call (adapter function adjusted_angle), returning both its
 initial and adjusted results. The benchmark evaluates initial and adjusted BoS
 as TWO SCORE OUTPUTS of the same method, never as two separately run methods.
 
-Implement the support boundary evaluation as well as the local-sector one and the distance to the boundary (depth).
 """
 from __future__ import annotations
 import argparse, importlib, json, math, traceback
@@ -545,18 +544,15 @@ def run(args):
                 d_boundary=case.d_boundary if case.d_boundary is not None else np.array([]),
                 gap=case.gap if case.gap is not None else np.array([]),
                 eval_mask=case.eval_mask if case.eval_mask is not None else np.array([]))
-        # Per-dataset thresholds relative to geometric scale. Near=eps*kNN median.
-        # This makes ground truth resolution-aware but remains independent of scores.
-        if case.task=='support':
-            kth=cKDTree(case.X).query(case.X,k=min(args.k+1,len(case.X)))[0][:,-1]
-            eps=args.eps_factor*float(np.median(kth))
-            deep=max(args.deep_factor*eps,eps+1e-12)
-        else:eps=deep=np.nan
-        relaxed=resume and case.task=='support'
+        # Support labels always use true-distance quantiles, independent of k
+        # and method scores. Keep eps/deep column names for output compatibility:
+        # they now store the 20th/50th percentiles, not radius-based cutoffs.
+        relaxed=case.task=='support'
         if relaxed:
             eps,deep=np.quantile(case.d_boundary,[.2,.5])
             if eps>=deep:
                 raise ValueError('Distance quantiles cannot separate classes for '+case.name)
+        else:eps=deep=np.nan
         saved_scores={}
         for method in METHODS:
             status='OK';details=('Relaxed labels: nearest 20% vs farthest 50%; Spearman on all finite scores' if relaxed else '')
@@ -683,7 +679,9 @@ def run(args):
         columns=['Dataset','Method','Output','AUROC','AUPRC','BalancedAcc','F1','Spearman']
         tex=t[columns].to_latex(index=False,escape=True,longtable=True,caption=f'{task.capitalize()}-boundary benchmark (one random seed). -- = unavailable or undefined.',label=f'tab:{task}_benchmark')
         (out/f'{task}_metrics.tex').write_text(tex)
-    (out/('resume_relaxed_config.json' if resume else 'run_config.json')).write_text(json.dumps(vars(args),indent=2))
+    config={**vars(args), 'support_label_policy':'distance <= Q20 vs distance >= Q50',
+            'support_spearman_population':'all finite scores'}
+    (out/('resume_relaxed_config.json' if resume else 'run_config.json')).write_text(json.dumps(config,indent=2))
     print('Files written to:',out.resolve())
 
 if __name__=='__main__':
@@ -699,8 +697,8 @@ if __name__=='__main__':
     p.add_argument('--local-intrinsic',default='2,3,5')
     p.add_argument('--noise',type=float,default=0.)
     p.add_argument('--seed',type=int,default=42)
-    p.add_argument('--eps-factor',type=float,default=.6,help='near-boundary threshold / median kth-NN distance')
-    p.add_argument('--deep-factor',type=float,default=3.,help='deep-interior threshold / eps')
+    p.add_argument('--eps-factor',type=float,default=.6,help='Legacy setting used only to validate old epsilon-based runs with --resume-relaxed; new labels always use Q20/Q50')
+    p.add_argument('--deep-factor',type=float,default=3.,help='Deprecated compatibility argument; ignored for Q20/Q50 labels')
     p.add_argument('--local-threshold',type=float,default=.5,help='positive iff missing directional fraction >= threshold')
     p.add_argument('--distance-bins',type=int,default=10,help='Number of distance quantile bins for oriented diagnostic curves')
     p.add_argument('--save-datasets',action='store_true')
